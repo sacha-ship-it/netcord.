@@ -6,22 +6,10 @@ const { DatabaseSync } = require('node:sqlite');
 const { randomUUID, randomInt } = require('node:crypto');
 
 const {
-  Client,
-  Events,
-  GatewayIntentBits: I,
-  Partials,
-  ChannelType: C,
-  PermissionFlagsBits: P,
-  MessageFlags,
-  SlashCommandBuilder,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
-  ActionRowBuilder,
-  EmbedBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  AttachmentBuilder,
+  Client, Events, GatewayIntentBits: I, Partials, ChannelType: C,
+  PermissionFlagsBits: P, MessageFlags, SlashCommandBuilder,
+  ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder,
+  EmbedBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder,
 } = require('discord.js');
 
 function required(name) {
@@ -41,7 +29,7 @@ if (!/^\d{17,20}$/.test(GUILD)) {
   throw new Error('DISCORD_GUILD_ID invalide.');
 }
 
-// Stockage local créé automatiquement.
+// Créé automatiquement, sans configuration supplémentaire.
 const directory = path.join(__dirname, 'data');
 
 fs.mkdirSync(directory, {
@@ -73,10 +61,10 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS users_xp
-    ON users(xp DESC, id);
+    ON users(xp DESC,id);
 
   CREATE INDEX IF NOT EXISTS users_coins
-    ON users(coins DESC, id);
+    ON users(coins DESC,id);
 
   CREATE TABLE IF NOT EXISTS quests (
     id TEXT PRIMARY KEY,
@@ -92,7 +80,7 @@ db.exec(`
     quest TEXT NOT NULL,
     user TEXT NOT NULL,
     message TEXT NOT NULL,
-    PRIMARY KEY(quest, user)
+    PRIMARY KEY(quest,user)
   );
 
   CREATE TABLE IF NOT EXISTS events (
@@ -130,15 +118,31 @@ db.exec(`
     action TEXT NOT NULL,
     detail TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS assets (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    bytes BLOB NOT NULL
+  );
 `);
+
+// Adaptation automatique de l'ancienne version.
+const boxColumns = new Set(
+  db.prepare('PRAGMA table_info(boxes)').all().map(c => c.name)
+);
+
+if (!boxColumns.has('channel')) {
+  db.exec('ALTER TABLE boxes ADD COLUMN channel TEXT');
+}
+
+if (!boxColumns.has('title')) {
+  db.exec('ALTER TABLE boxes ADD COLUMN title TEXT');
+}
 
 const sql = new Map();
 
 function statement(text) {
-  if (!sql.has(text)) {
-    sql.set(text, db.prepare(text));
-  }
-
+  if (!sql.has(text)) sql.set(text, db.prepare(text));
   return sql.get(text);
 }
 
@@ -177,9 +181,7 @@ function set(key, value) {
   );
 }
 
-if (!setting('guild', null)) {
-  set('guild', GUILD);
-}
+if (!setting('guild', null)) set('guild', GUILD);
 
 if (setting('guild') !== GUILD) {
   throw new Error('Ce stockage appartient à un autre serveur.');
@@ -214,18 +216,14 @@ function add(id, xp = 0, coins = 0) {
 
   run(
     'UPDATE users SET xp=xp+?,coins=coins+? WHERE id=?',
-    xp,
-    coins,
-    id
+    xp, coins, id
   );
 }
 
 class UserError extends Error {}
 
 function error(where, e) {
-  console.error(
-    `${where}: ${e.code || e.name || 'Erreur'}`
-  );
+  console.error(`${where}: ${e.code || e.name || 'Erreur'}`);
 }
 
 const defaults = {
@@ -235,40 +233,14 @@ const defaults = {
   invitation: 25,
   delai: 60,
   active: true,
-  channels: [],
 };
 
 const tiersDefault = [
-  {
-    name: 'Commune',
-    chance: 60,
-    amount: 25,
-    color: 0x95a5a6,
-  },
-  {
-    name: 'Peu commune',
-    chance: 25,
-    amount: 50,
-    color: 0x2ecc71,
-  },
-  {
-    name: 'Rare',
-    chance: 10,
-    amount: 100,
-    color: 0x3498db,
-  },
-  {
-    name: 'Épique',
-    chance: 4,
-    amount: 250,
-    color: 0x9b59b6,
-  },
-  {
-    name: 'Légendaire',
-    chance: 1,
-    amount: 500,
-    color: 0xf1c40f,
-  },
+  { name: 'Commune', chance: 60, amount: 25, color: 0x95a5a6 },
+  { name: 'Peu commune', chance: 25, amount: 50, color: 0x2ecc71 },
+  { name: 'Rare', chance: 10, amount: 100, color: 0x3498db },
+  { name: 'Épique', chance: 4, amount: 250, color: 0x9b59b6 },
+  { name: 'Légendaire', chance: 1, amount: 500, color: 0xf1c40f },
 ];
 
 function pick(tiers) {
@@ -280,6 +252,278 @@ function pick(tiers) {
   }
 
   throw new Error('Probabilités invalides.');
+}
+
+function color(value, fallback = 0x5865f2) {
+  if (!value?.trim()) return fallback;
+
+  const text = value.trim().replace(/^#/, '');
+
+  if (!/^[0-9a-f]{6}$/i.test(text)) {
+    throw new UserError(
+      'Couleur attendue : un code HEX comme #E91E63 ou #FFD700.'
+    );
+  }
+
+  return parseInt(text, 16);
+}
+
+function hex(value) {
+  return `#${value.toString(16).padStart(6, '0').toUpperCase()}`;
+}
+
+function tiersFor(currency) {
+  return setting(`tiers:${currency}`, tiersDefault).map(
+    (tier, index) => ({
+      ...tiersDefault[index],
+      description: '',
+      image: null,
+      ...tier,
+    })
+  );
+}
+
+function boxStyle(currency) {
+  return {
+    title: '🎁 Ta lootbox du jour',
+    description: 'Ouvre ton coffre quotidien et découvre ta récompense !',
+    color: 0xf1c40f,
+    image: null,
+    animation: null,
+    seconds: 3,
+    ...setting(`boxstyle:${currency}`, {}),
+  };
+}
+
+async function importAsset(attachment, gifOnly = false) {
+  if (!attachment || attachment.size > 8 * 1024 * 1024) {
+    throw new UserError(
+      'Fichier trop volumineux : maximum 8 Mo.'
+    );
+  }
+
+  const url = new URL(attachment.url);
+
+  if (
+    url.protocol !== 'https:' ||
+    !['cdn.discordapp.com', 'media.discordapp.net'].includes(url.hostname)
+  ) {
+    throw new UserError(
+      'Joins directement le fichier à la commande Discord.'
+    );
+  }
+
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(15000),
+    redirect: 'error',
+  });
+
+  if (!response.ok) {
+    throw new UserError(
+      'Fichier inaccessible. Joins-le à nouveau à la commande.'
+    );
+  }
+
+  const parts = [];
+  let size = 0;
+  const reader = response.body.getReader();
+
+  for (;;) {
+    const { done, value } = await reader.read();
+
+    if (done) break;
+
+    size += value.length;
+
+    if (size > 8 * 1024 * 1024) {
+      await reader.cancel();
+
+      throw new UserError(
+        'Fichier trop volumineux : maximum 8 Mo.'
+      );
+    }
+
+    parts.push(value);
+  }
+
+  const bytes = Buffer.concat(parts);
+
+  const ext =
+    ['GIF87a', 'GIF89a'].includes(bytes.subarray(0, 6).toString())
+      ? 'gif'
+      : bytes.subarray(0, 8).equals(
+          Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
+        )
+        ? 'png'
+        : bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255
+          ? 'jpg'
+          : bytes.subarray(0, 4).toString() === 'RIFF' &&
+            bytes.subarray(8, 12).toString() === 'WEBP'
+            ? 'webp'
+            : null;
+
+  if (!ext || (gifOnly && ext !== 'gif')) {
+    throw new UserError(
+      gifOnly
+        ? 'Importe un GIF pour l’animation d’ouverture. Les vidéos MP4 ne se lisent pas automatiquement dans cet embed.'
+        : 'Formats acceptés : PNG, JPG, WEBP ou GIF.'
+    );
+  }
+
+  const id = randomUUID();
+
+  run(
+    'INSERT INTO assets VALUES (?,?,?)',
+    id,
+    `visuel-${id}.${ext}`,
+    bytes
+  );
+
+  return id;
+}
+
+function withImage(embed, assetId) {
+  const asset = assetId
+    ? get('SELECT * FROM assets WHERE id=?', assetId)
+    : null;
+
+  if (!asset) {
+    return {
+      embeds: [embed],
+      files: [],
+      attachments: [],
+      allowedMentions: noPing,
+    };
+  }
+
+  embed.setImage(`attachment://${asset.name}`);
+
+  return {
+    embeds: [embed],
+    files: [
+      new AttachmentBuilder(
+        Buffer.from(asset.bytes),
+        { name: asset.name }
+      ),
+    ],
+    attachments: [],
+    allowedMentions: noPing,
+  };
+}
+
+function resultMessage(id, currency, tier, style, preview = false) {
+  const embed = new EmbedBuilder()
+    .setColor(tier.color)
+    .setTitle(`🎁 ${tier.name}`)
+    .setDescription(
+      [
+        tier.description,
+        `${preview ? 'Cette récompense contient' : 'Tu gagnes'} ` +
+          `**${tier.amount.toLocaleString('fr-FR')} ` +
+          `${currency === 'xp' ? 'XP' : 'coins'}** !`,
+        preview
+          ? '*Aperçu : aucun point crédité.*'
+          : position(id, currency),
+      ]
+        .filter(Boolean)
+        .join('\n\n')
+    )
+    .setFooter({
+      text: preview
+        ? 'Aperçu administrateur, sans ouverture de lootbox.'
+        : 'Récompense ajoutée à ton solde. Reviens demain pour une nouvelle ouverture !',
+    });
+
+  return withImage(embed, tier.image || style.image);
+}
+
+async function animateBox(i, currency, tier) {
+  const style = boxStyle(currency);
+
+  if (style.animation) {
+    try {
+      await i.editReply(
+        withImage(
+          new EmbedBuilder()
+            .setColor(style.color)
+            .setTitle('✨ Ouverture de ta lootbox…')
+            .setDescription(
+              'Ton coffre s’ouvre… Découvre ta récompense dans un instant !'
+            ),
+          style.animation
+        )
+      );
+
+      await new Promise(resolve =>
+        setTimeout(resolve, style.seconds * 1000)
+      );
+    } catch (e) {
+      error('Animation (récompense conservée)', e);
+    }
+  }
+
+  await i.editReply(
+    resultMessage(i.user.id, currency, tier, style)
+  );
+}
+
+let updatingBoxes = false;
+
+async function updateBoxes(currency) {
+  if (updatingBoxes) return;
+  updatingBoxes = true;
+
+  try {
+    for (const box of all(
+      'SELECT * FROM boxes WHERE currency=?',
+      currency
+    )) {
+      if (!box.channel) continue;
+
+      try {
+        const channel = await client.channels.fetch(box.channel);
+        const message = await channel.messages.fetch(box.message);
+
+        await message.edit(
+          boxMessage(currency, box.title || undefined)
+        );
+      } catch (e) {
+        if ([10003, 10008].includes(Number(e.code))) {
+          run(
+            'DELETE FROM boxes WHERE message=?',
+            box.message
+          );
+        } else {
+          error('Actualisation du visuel de lootbox', e);
+        }
+      }
+    }
+  } finally {
+    updatingBoxes = false;
+  }
+}
+
+async function styleFromOptions(i, currency) {
+  const image = i.options.getAttachment('image');
+  const animation = i.options.getAttachment('animation');
+  const parsedColor = i.options.getString('couleur');
+
+  const nextColor = parsedColor ? color(parsedColor) : null;
+  const imageId = image ? await importAsset(image) : null;
+
+  const animationId = animation
+    ? await importAsset(animation, true)
+    : null;
+
+  const style = boxStyle(currency);
+
+  if (imageId) style.image = imageId;
+  if (animationId) style.animation = animationId;
+  if (nextColor !== null) style.color = nextColor;
+
+  set(`boxstyle:${currency}`, style);
+
+  return style;
 }
 
 const fmt = new Intl.DateTimeFormat('fr-FR', {
@@ -294,9 +538,9 @@ const fmt = new Intl.DateTimeFormat('fr-FR', {
 
 function paris(now = Date.now()) {
   const parts = Object.fromEntries(
-    fmt
-      .formatToParts(new Date(now))
-      .map(x => [x.type, x.value])
+    fmt.formatToParts(new Date(now)).map(
+      part => [part.type, part.value]
+    )
   );
 
   return {
@@ -344,10 +588,10 @@ function task(name, fn) {
   void promise.finally(() => jobs.delete(promise));
 }
 
-function admin(interaction) {
+function admin(i) {
   if (
-    interaction.guildId !== GUILD ||
-    !interaction.memberPermissions?.has(P.ManageGuild)
+    i.guildId !== GUILD ||
+    !i.memberPermissions?.has(P.ManageGuild)
   ) {
     throw new UserError(
       'Commande réservée aux membres ayant Gérer le serveur.'
@@ -405,15 +649,8 @@ function permission(channel, list) {
   }
 }
 
-function canEarn(channel, config) {
-  return (
-    config.active &&
-    (
-      !config.channels.length ||
-      config.channels.includes(channel.id) ||
-      config.channels.includes(channel.parentId)
-    )
-  );
+function canEarn(_channel, config) {
+  return config.active;
 }
 
 function meets(message, format) {
@@ -427,14 +664,13 @@ function meets(message, format) {
     attachment => attachment.contentType?.startsWith('video/')
   );
 
-  if (format === 'texte') {
-    return Boolean(message.content?.trim());
-  }
-
-  if (format === 'image') return image;
-  if (format === 'video') return video;
-
-  return image || video;
+  return format === 'texte'
+    ? Boolean(message.content?.trim())
+    : format === 'image'
+      ? image
+      : format === 'video'
+        ? video
+        : image || video;
 }
 
 function claimQuest(message, quest) {
@@ -495,15 +731,11 @@ async function processMessage(message, catchup = false) {
         },
       });
     } catch (e) {
-      error(
-        'Confirmation de quête (récompense conservée)',
-        e
-      );
+      error('Confirmation de quête (récompense conservée)', e);
     }
   }
 
-  // Les quêtes ne donnent pas de bonus d'activité supplémentaire.
-  if (catchup || quest) return;
+  if (catchup) return;
 
   const config = setting('activity', defaults);
 
@@ -570,7 +802,6 @@ async function processReaction(reaction, author) {
   }
 
   transaction(() => {
-    // Une seule récompense par membre et message.
     const inserted = run(
       'INSERT OR IGNORE INTO events VALUES (?,?)',
       `r:${message.id}:${author.id}`,
@@ -658,7 +889,6 @@ async function join(member) {
     return;
   }
 
-  // Ne pas inventer une attribution si un lien a disparu.
   if ([...before.keys()].some(code => !invites.has(code))) {
     return;
   }
@@ -705,32 +935,40 @@ function leaderboard(currency) {
      LIMIT 20`
   );
 
+  const embed = new EmbedBuilder()
+    .setColor(
+      setting(
+        `boardcolor:${currency}`,
+        currency === 'xp' ? 0x5865f2 : 0xf1c40f
+      )
+    )
+    .setTitle(
+      currency === 'xp'
+        ? '🏆 Classement XP'
+        : '🪙 Classement coins'
+    )
+    .setDescription(
+      entries
+        .map(
+          (member, index) =>
+            `**${index + 1}.** <@${member.id}> · ` +
+            `**${member.amount.toLocaleString('fr-FR')} ` +
+            `${currency === 'xp' ? 'XP' : 'coins'}**`
+        )
+        .join('\n') || 'Aucun point pour le moment.'
+    )
+    .setFooter({
+      text:
+        'Actualisé chaque matin à 10 h, heure de Paris. ' +
+        'Le bouton affiche ta position actuelle.',
+    })
+    .setTimestamp();
+
   return {
-    embeds: [
-      new EmbedBuilder()
-        .setColor(currency === 'xp' ? 0x5865f2 : 0xf1c40f)
-        .setTitle(
-          currency === 'xp'
-            ? '🏆 Classement XP'
-            : '🪙 Classement coins'
-        )
-        .setDescription(
-          entries
-            .map(
-              (member, index) =>
-                `**${index + 1}.** <@${member.id}> · ` +
-                `**${member.amount.toLocaleString('fr-FR')} ` +
-                `${currency === 'xp' ? 'XP' : 'coins'}**`
-            )
-            .join('\n') || 'Aucun point pour le moment.'
-        )
-        .setFooter({
-          text:
-            'Actualisé chaque matin à 10 h, heure de Paris. ' +
-            'Le bouton affiche ta position actuelle.',
-        })
-        .setTimestamp(),
-    ],
+    ...withImage(
+      embed,
+      setting(`boardimage:${currency}`, null)
+    ),
     components: [
       row(
         button(
@@ -740,7 +978,6 @@ function leaderboard(currency) {
         )
       ),
     ],
-    allowedMentions: noPing,
   };
 }
 
@@ -748,7 +985,6 @@ let refreshing = false;
 
 async function refreshBoards(force = false) {
   if (refreshing) return;
-
   refreshing = true;
 
   try {
@@ -791,32 +1027,31 @@ async function refreshBoards(force = false) {
 }
 
 function boxMessage(currency, title) {
-  const tiers = setting(`tiers:${currency}`, tiersDefault);
+  const tiers = tiersFor(currency);
+  const style = boxStyle(currency);
+
+  const embed = new EmbedBuilder()
+    .setColor(style.color)
+    .setTitle(title || style.title)
+    .setDescription(
+      `${style.description}\n\n**Les récompenses possibles**\n` +
+      tiers
+        .map(
+          tier =>
+            `**${tier.name}** : ${tier.amount} ` +
+            `${currency === 'xp' ? 'XP' : 'coins'} · ` +
+            `${tier.chance} %`
+        )
+        .join('\n')
+    )
+    .setFooter({
+      text:
+        'Une ouverture par membre et par jour. ' +
+        'Nouveau coffre à minuit, heure de Paris.',
+    });
 
   return {
-    embeds: [
-      new EmbedBuilder()
-        .setColor(0xf1c40f)
-        .setTitle(title)
-        .setDescription(
-          `Ouvre ta lootbox quotidienne et gagne des ` +
-          `**${currency === 'xp' ? 'XP' : 'coins'}** !\n\n` +
-          tiers
-            .map(
-              tier =>
-                `**${tier.name}** : ${tier.amount} ` +
-                `${currency === 'xp' ? 'XP' : 'coins'} · ` +
-                `${tier.chance} %`
-            )
-            .join('\n')
-        )
-        .setFooter({
-          text:
-            'Une ouverture par membre et par jour, ' +
-            'toutes les lootbox confondues. ' +
-            'Nouveau jour à minuit, heure de Paris.',
-        }),
-    ],
+    ...withImage(embed, style.image),
     components: [
       row(
         button(
@@ -825,7 +1060,6 @@ function boxMessage(currency, title) {
         )
       ),
     ],
-    allowedMentions: noPing,
   };
 }
 
@@ -841,9 +1075,7 @@ function openBox(id, currency) {
       );
     }
 
-    const tier = pick(
-      setting(`tiers:${currency}`, tiersDefault)
-    );
+    const tier = pick(tiersFor(currency));
 
     add(
       id,
@@ -906,6 +1138,24 @@ const textOption = option =>
     .setRequired(true)
     .addChannelTypes(C.GuildText, C.GuildAnnouncement);
 
+const colorOption = option =>
+  option
+    .setName('couleur')
+    .setDescription('Couleur HEX, par exemple #FFD700')
+    .setMaxLength(7);
+
+const rarityOption = option =>
+  option
+    .setName('rarete')
+    .setDescription('Niveau de rareté à personnaliser')
+    .setRequired(true)
+    .addChoices(
+      ...tiersDefault.map((tier, index) => ({
+        name: tier.name,
+        value: index,
+      }))
+    );
+
 const commands = [
   base('quete', 'Créer et gérer les quêtes')
     .addSubcommand(sub =>
@@ -921,277 +1171,211 @@ const commands = [
             .addChoices(
               { name: 'Image jointe', value: 'image' },
               { name: 'Vidéo jointe', value: 'video' },
-              {
-                name: 'Image ou vidéo jointe',
-                value: 'media',
-              },
+              { name: 'Image ou vidéo jointe', value: 'media' },
               { name: 'Texte', value: 'texte' }
             )
         )
         .addIntegerOption(option =>
-          option
-            .setName('xp')
-            .setDescription('Récompense XP')
-            .setMinValue(0)
-            .setMaxValue(1000000)
+          option.setName('xp').setDescription('Récompense XP')
+            .setMinValue(0).setMaxValue(1000000)
         )
         .addIntegerOption(option =>
-          option
-            .setName('coins')
-            .setDescription('Récompense coins')
-            .setMinValue(0)
-            .setMaxValue(1000000)
+          option.setName('coins').setDescription('Récompense coins')
+            .setMinValue(0).setMaxValue(1000000)
         )
         .addAttachmentOption(option =>
-          option
-            .setName('image')
-            .setDescription(
-              'Image de présentation facultative, maximum 8 Mo'
-            )
+          option.setName('image')
+            .setDescription('Image de présentation facultative, maximum 8 Mo')
         )
+        .addStringOption(colorOption)
         .addStringOption(option =>
-          option
-            .setName('tag')
-            .setDescription(
-              'Nom exact du tag du forum si nécessaire'
-            )
+          option.setName('tag')
+            .setDescription('Nom exact du tag du forum si nécessaire')
             .setMaxLength(20)
         )
     )
     .addSubcommand(sub =>
-      sub
-        .setName('fermer')
-        .setDescription(
-          'Arrêter les récompenses et archiver la quête'
-        )
+      sub.setName('fermer')
+        .setDescription('Arrêter les récompenses et archiver la quête')
         .addStringOption(option =>
-          option
-            .setName('fil')
-            .setDescription('Identifiant ou lien du fil')
+          option.setName('fil').setDescription('Identifiant ou lien du fil')
             .setRequired(true)
         )
     )
     .addSubcommand(sub =>
-      sub
-        .setName('supprimer')
-        .setDescription(
-          'Supprimer le post de quête après confirmation'
-        )
+      sub.setName('supprimer')
+        .setDescription('Supprimer le post de quête après confirmation')
         .addStringOption(option =>
-          option
-            .setName('fil')
-            .setDescription('Identifiant ou lien du fil')
+          option.setName('fil').setDescription('Identifiant ou lien du fil')
             .setRequired(true)
         )
     )
     .addSubcommand(sub =>
-      sub
-        .setName('liste')
-        .setDescription(
-          'Afficher les quêtes et leurs récompenses'
-        )
+      sub.setName('liste')
+        .setDescription('Afficher les quêtes et leurs récompenses')
     ),
 
   base('classement', 'Publier et actualiser les classements')
     .addSubcommand(sub =>
-      sub
-        .setName('publier')
+      sub.setName('publier')
         .setDescription('Publier le classement Top 20')
         .addStringOption(currencyOption)
         .addChannelOption(textOption)
+        .addStringOption(colorOption)
+        .addAttachmentOption(option =>
+          option.setName('image')
+            .setDescription('Grande image facultative du classement')
+        )
     )
     .addSubcommand(sub =>
-      sub
-        .setName('actualiser')
+      sub.setName('apparence')
+        .setDescription('Modifier la couleur ou l’image du classement existant')
+        .addStringOption(currencyOption)
+        .addStringOption(colorOption)
+        .addAttachmentOption(option =>
+          option.setName('image')
+            .setDescription('Grande image du classement')
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('actualiser')
         .setDescription('Actualiser les classements maintenant')
     ),
 
   base('points', 'Gérer les soldes XP et coins')
     .addSubcommand(sub =>
-      sub
-        .setName('ajouter')
+      sub.setName('ajouter')
         .setDescription('Ajouter des points')
         .addUserOption(option =>
-          option
-            .setName('membre')
-            .setDescription('Membre')
-            .setRequired(true)
+          option.setName('membre').setDescription('Membre').setRequired(true)
         )
         .addStringOption(currencyOption)
         .addIntegerOption(option =>
-          option
-            .setName('montant')
-            .setDescription('Nombre de points')
-            .setRequired(true)
-            .setMinValue(1)
-            .setMaxValue(1000000)
+          option.setName('montant').setDescription('Nombre de points')
+            .setRequired(true).setMinValue(1).setMaxValue(1000000)
         )
     )
     .addSubcommand(sub =>
-      sub
-        .setName('retirer')
+      sub.setName('retirer')
         .setDescription('Retirer des points')
         .addUserOption(option =>
-          option
-            .setName('membre')
-            .setDescription('Membre')
-            .setRequired(true)
+          option.setName('membre').setDescription('Membre').setRequired(true)
         )
         .addStringOption(currencyOption)
         .addIntegerOption(option =>
-          option
-            .setName('montant')
-            .setDescription('Nombre de points')
-            .setRequired(true)
-            .setMinValue(1)
-            .setMaxValue(1000000)
+          option.setName('montant').setDescription('Nombre de points')
+            .setRequired(true).setMinValue(1).setMaxValue(1000000)
         )
     )
     .addSubcommand(sub =>
-      sub
-        .setName('reset')
-        .setDescription(
-          'Remettre les soldes à zéro après confirmation'
-        )
+      sub.setName('reset')
+        .setDescription('Remettre les soldes à zéro après confirmation')
         .addStringOption(option =>
-          option
-            .setName('monnaie')
-            .setDescription('Solde à remettre à zéro')
+          option.setName('monnaie').setDescription('Solde à remettre à zéro')
             .setRequired(true)
-            .addChoices(
-              ...currencies,
-              { name: 'XP et coins', value: 'tout' }
-            )
+            .addChoices(...currencies, { name: 'XP et coins', value: 'tout' })
         )
     ),
 
   base('lootbox', 'Publier et configurer les lootbox')
     .addSubcommand(sub =>
-      sub
-        .setName('publier')
-        .setDescription(
-          'Publier le bouton de lootbox quotidienne'
-        )
+      sub.setName('publier')
+        .setDescription('Publier le bouton de lootbox quotidienne')
         .addStringOption(currencyOption)
         .addChannelOption(textOption)
         .addStringOption(option =>
-          option
-            .setName('titre')
-            .setDescription('Titre facultatif')
+          option.setName('titre').setDescription('Titre facultatif')
             .setMaxLength(100)
+        )
+        .addAttachmentOption(option =>
+          option.setName('image').setDescription('Grande image de présentation')
+        )
+        .addAttachmentOption(option =>
+          option.setName('animation')
+            .setDescription('GIF d’ouverture à importer, maximum 8 Mo')
+        )
+        .addStringOption(colorOption)
+    )
+    .addSubcommand(sub =>
+      sub.setName('configurer')
+        .setDescription('Configurer les chances et gains des 5 raretés')
+        .addStringOption(currencyOption)
+    )
+    .addSubcommand(sub =>
+      sub.setName('personnaliser')
+        .setDescription('Personnaliser le titre, le texte et la couleur de la lootbox')
+        .addStringOption(currencyOption)
+    )
+    .addSubcommand(sub =>
+      sub.setName('rarete')
+        .setDescription('Nom, description, couleur et image d’une récompense')
+        .addStringOption(currencyOption)
+        .addIntegerOption(rarityOption)
+        .addAttachmentOption(option =>
+          option.setName('image').setDescription('Grande image de cette rareté')
         )
     )
     .addSubcommand(sub =>
-      sub
-        .setName('configurer')
-        .setDescription('Configurer les 5 raretés')
+      sub.setName('visuels')
+        .setDescription('Importer l’image de présentation et le GIF d’ouverture')
         .addStringOption(currencyOption)
+        .addAttachmentOption(option =>
+          option.setName('image').setDescription('Grande image de présentation')
+        )
+        .addAttachmentOption(option =>
+          option.setName('animation').setDescription('GIF d’ouverture, maximum 8 Mo')
+        )
+        .addIntegerOption(option =>
+          option.setName('secondes')
+            .setDescription('Durée d’affichage du GIF, de 1 à 15 secondes')
+            .setMinValue(1).setMaxValue(15)
+        )
+    )
+    .addSubcommand(sub =>
+      sub.setName('apercu')
+        .setDescription('Voir une récompense sans dépenser la box du jour')
+        .addStringOption(currencyOption)
+        .addIntegerOption(rarityOption)
     ),
 
   base('activite', 'Configurer les gains XP automatiques')
     .addSubcommand(sub =>
-      sub
-        .setName('configurer')
+      sub.setName('configurer')
         .setDescription('Modifier les points et le délai')
         .addIntegerOption(option =>
-          option
-            .setName('message')
-            .setDescription('XP par message')
-            .setMinValue(0)
-            .setMaxValue(1000)
+          option.setName('message').setDescription('XP par message')
+            .setMinValue(0).setMaxValue(1000)
         )
         .addIntegerOption(option =>
-          option
-            .setName('media')
-            .setDescription(
-              'Bonus XP pour une image ou vidéo jointe'
-            )
-            .setMinValue(0)
-            .setMaxValue(1000)
+          option.setName('media')
+            .setDescription('Bonus XP pour une image ou vidéo jointe')
+            .setMinValue(0).setMaxValue(1000)
         )
         .addIntegerOption(option =>
-          option
-            .setName('reaction')
-            .setDescription('XP par réaction')
-            .setMinValue(0)
-            .setMaxValue(1000)
+          option.setName('reaction').setDescription('XP par réaction')
+            .setMinValue(0).setMaxValue(1000)
         )
         .addIntegerOption(option =>
-          option
-            .setName('invitation')
-            .setDescription(
-              'XP par invitation attribuée sans ambiguïté'
-            )
-            .setMinValue(0)
-            .setMaxValue(10000)
+          option.setName('invitation')
+            .setDescription('XP par invitation attribuée sans ambiguïté')
+            .setMinValue(0).setMaxValue(10000)
         )
         .addIntegerOption(option =>
-          option
-            .setName('delai')
-            .setDescription(
-              'Délai entre gains, en secondes'
-            )
-            .setMinValue(10)
-            .setMaxValue(86400)
+          option.setName('delai').setDescription('Délai entre gains, en secondes')
+            .setMinValue(10).setMaxValue(86400)
         )
         .addBooleanOption(option =>
-          option
-            .setName('active')
-            .setDescription('Activer les gains d’activité')
+          option.setName('active').setDescription('Activer les gains d’activité')
         )
     )
     .addSubcommand(sub =>
-      sub
-        .setName('salon')
-        .setDescription(
-          'Restreindre les gains à certains salons'
-        )
-        .addStringOption(option =>
-          option
-            .setName('action')
-            .setDescription('Action')
-            .setRequired(true)
-            .addChoices(
-              {
-                name: 'Ajouter un salon',
-                value: 'ajouter',
-              },
-              {
-                name: 'Retirer un salon',
-                value: 'retirer',
-              },
-              {
-                name: 'Tous les salons',
-                value: 'tous',
-              }
-            )
-        )
-        .addChannelOption(option =>
-          option
-            .setName('salon')
-            .setDescription('Salon ou forum')
-            .addChannelTypes(
-              C.GuildText,
-              C.GuildAnnouncement,
-              C.GuildForum
-            )
-        )
-    )
-    .addSubcommand(sub =>
-      sub
-        .setName('voir')
-        .setDescription('Afficher les réglages actuels')
+      sub.setName('voir').setDescription('Afficher les réglages actuels')
     ),
 
-  base(
-    'profil',
-    'Voir tes XP, coins et positions',
-    false
-  ).addUserOption(option =>
-    option
-      .setName('membre')
-      .setDescription('Autre membre facultatif')
-  ),
+  base('profil', 'Voir tes XP, coins et positions', false)
+    .addUserOption(option =>
+      option.setName('membre').setDescription('Autre membre facultatif')
+    ),
 ];
 
 function questId(value) {
@@ -1215,10 +1399,7 @@ function position(id, currency) {
   const amount = record[currency];
 
   if (!amount) {
-    return (
-      `0 ${currency === 'xp' ? 'XP' : 'coins'} · ` +
-      'pas encore classé'
-    );
+    return `0 ${currency === 'xp' ? 'XP' : 'coins'} · pas encore classé`;
   }
 
   const above = get(
@@ -1226,9 +1407,7 @@ function position(id, currency) {
      FROM users
      WHERE ${currency}>?
         OR (${currency}=? AND id<?)`,
-    amount,
-    amount,
-    id
+    amount, amount, id
   ).n;
 
   return (
@@ -1238,14 +1417,9 @@ function position(id, currency) {
   );
 }
 
-async function createQuest(interaction, draft) {
-  const title = interaction.fields
-    .getTextInputValue('titre')
-    .trim();
-
-  const body = interaction.fields
-    .getTextInputValue('texte')
-    .trim();
+async function createQuest(i, draft) {
+  const title = i.fields.getTextInputValue('titre').trim();
+  const body = i.fields.getTextInputValue('texte').trim();
 
   if (!title || !body) {
     throw new UserError(
@@ -1253,9 +1427,7 @@ async function createQuest(interaction, draft) {
     );
   }
 
-  const forum = await interaction.guild.channels.fetch(
-    draft.forum
-  );
+  const forum = await i.guild.channels.fetch(draft.forum);
 
   if (!forum || forum.type !== C.GuildForum) {
     throw new UserError('Forum introuvable.');
@@ -1286,18 +1458,13 @@ async function createQuest(interaction, draft) {
       tag.moderated &&
       !forum.permissionsFor(client.user).has(P.ManageThreads)
     ) {
-      throw new UserError(
-        'Ce tag exige Gérer les fils.'
-      );
+      throw new UserError('Ce tag exige Gérer les fils.');
     }
 
     appliedTags.push(tag.id);
   }
 
-  if (
-    forum.flags.has('RequireTag') &&
-    !appliedTags.length
-  ) {
+  if (forum.flags.has('RequireTag') && !appliedTags.length) {
     throw new UserError(
       'Ce forum exige un tag. Recrée la quête avec l’option tag.'
     );
@@ -1311,7 +1478,7 @@ async function createQuest(interaction, draft) {
   };
 
   const embed = new EmbedBuilder()
-    .setColor(0x5865f2)
+    .setColor(draft.color ?? 0x5865f2)
     .setTitle(title)
     .setDescription(body)
     .addFields(
@@ -1323,9 +1490,8 @@ async function createQuest(interaction, draft) {
         name: 'Participation',
         value:
           `Format : **${formats[draft.format]}**.\n` +
-          'Une récompense par membre. ' +
-          'Attribution automatique selon le format, ' +
-          'sans vérification de la preuve.',
+          'Une récompense par membre. Attribution automatique ' +
+          'selon le format, sans vérification de la preuve.',
       }
     );
 
@@ -1337,10 +1503,7 @@ async function createQuest(interaction, draft) {
     const url = new URL(draft.image.url);
 
     if (
-      ![
-        'cdn.discordapp.com',
-        'media.discordapp.net',
-      ].includes(url.hostname) ||
+      !['cdn.discordapp.com', 'media.discordapp.net'].includes(url.hostname) ||
       url.protocol !== 'https:'
     ) {
       throw new UserError('Image Discord invalide.');
@@ -1353,8 +1516,7 @@ async function createQuest(interaction, draft) {
 
     if (!response.ok) {
       throw new UserError(
-        'Image expirée ou inaccessible. ' +
-        'Recrée la quête avec l’image jointe.'
+        'Image expirée ou inaccessible. Recrée la quête avec l’image jointe.'
       );
     }
 
@@ -1392,13 +1554,10 @@ async function createQuest(interaction, draft) {
     embed.setImage(`attachment://${name}`);
   }
 
-  // Consommer le formulaire avant la publication.
-  const consumed = run(
+  if (!run(
     'DELETE FROM drafts WHERE id=?',
     draft.id
-  );
-
-  if (!consumed.changes) {
+  ).changes) {
     throw new UserError('Formulaire déjà envoyé.');
   }
 
@@ -1415,19 +1574,15 @@ async function createQuest(interaction, draft) {
   run(
     `INSERT INTO quests(id,title,format,xp,coins,cursor)
      VALUES (?,?,?,?,?,?)`,
-    thread.id,
-    title,
-    draft.format,
-    draft.xp,
-    draft.coins,
-    thread.id
+    thread.id, title, draft.format,
+    draft.xp, draft.coins, thread.id
   );
 
-  audit(interaction.user.id, 'creation_quete', {
+  audit(i.user.id, 'creation_quete', {
     thread: thread.id,
   });
 
-  await interaction.editReply(
+  await i.editReply(
     `Quête créée : <#${thread.id}>. ` +
     `Récompense : **${rewardLabel(draft.xp, draft.coins)}**.`
   );
@@ -1440,7 +1595,7 @@ async function interaction(i) {
     ? commands.some(command => command.name === i.commandName)
     : (
         (i.isButton() || i.isModalSubmit()) &&
-        /^(position:|box:|quest:|tiers:|delete:|reset:)/.test(
+        /^(position:|box:|quest:|tiers:|boxstyle:|rarity:|delete:|reset:)/.test(
           i.customId
         )
       );
@@ -1450,11 +1605,9 @@ async function interaction(i) {
   try {
     if (!ready || stopping) {
       await i.reply({
-        content:
-          'Le bot démarre. Réessaie dans quelques instants.',
+        content: 'Le bot démarre. Réessaie dans quelques instants.',
         flags: MessageFlags.Ephemeral,
       });
-
       return;
     }
 
@@ -1462,20 +1615,16 @@ async function interaction(i) {
       i.isButton() &&
       /^(position:|box:)/.test(i.customId);
 
-    const profileCommand =
-      i.isChatInputCommand() &&
-      i.commandName === 'profil';
-
-    if (!publicControl && !profileCommand) {
+    if (
+      !publicControl &&
+      !(i.isChatInputCommand() && i.commandName === 'profil')
+    ) {
       admin(i);
     }
 
     if (i.isChatInputCommand()) {
       const cmd = i.commandName;
-
-      const sub = cmd === 'profil'
-        ? ''
-        : i.options.getSubcommand();
+      const sub = cmd === 'profil' ? '' : i.options.getSubcommand();
 
       if (cmd === 'quete' && sub === 'creer') {
         const xp = i.options.getInteger('xp') || 0;
@@ -1496,22 +1645,14 @@ async function interaction(i) {
             attachment.size > 8 * 1024 * 1024
           )
         ) {
-          throw new UserError(
-            'Joins une image de 8 Mo maximum.'
-          );
+          throw new UserError('Joins une image de 8 Mo maximum.');
         }
-
-        const extensions = {
-          'image/jpeg': 'jpg',
-          'image/png': 'png',
-          'image/gif': 'gif',
-          'image/webp': 'webp',
-        };
 
         const id = randomUUID();
 
         const draft = {
           id,
+          color: color(i.options.getString('couleur')),
           forum: i.options.getChannel('forum').id,
           format: i.options.getString('format'),
           xp,
@@ -1520,17 +1661,19 @@ async function interaction(i) {
           image: attachment
             ? {
                 url: attachment.url,
-                ext:
-                  extensions[attachment.contentType] ||
-                  'png',
+                ext: ({
+                  'image/jpeg': 'jpg',
+                  'image/png': 'png',
+                  'image/gif': 'gif',
+                  'image/webp': 'webp',
+                })[attachment.contentType] || 'png',
               }
             : null,
         };
 
         run(
           'INSERT INTO drafts VALUES (?,?,?,?)',
-          id,
-          i.user.id,
+          id, i.user.id,
           Date.now() + 20 * 60000,
           JSON.stringify(draft)
         );
@@ -1540,16 +1683,12 @@ async function interaction(i) {
             `quest:${id}`,
             'Créer une quête',
             input(
-              'titre',
-              'Titre de la quête',
-              TextInputStyle.Short,
-              100
+              'titre', 'Titre de la quête',
+              TextInputStyle.Short, 100
             ),
             input(
-              'texte',
-              'Texte de la quête (retours à la ligne libres)',
-              TextInputStyle.Paragraph,
-              3800
+              'texte', 'Texte de la quête (retours à la ligne libres)',
+              TextInputStyle.Paragraph, 3800
             )
           )
         );
@@ -1559,11 +1698,7 @@ async function interaction(i) {
 
       if (cmd === 'lootbox' && sub === 'configurer') {
         const currency = i.options.getString('monnaie');
-
-        const tiers = setting(
-          `tiers:${currency}`,
-          tiersDefault
-        );
+        const tiers = tiersFor(currency);
 
         await i.showModal(
           modal(
@@ -1572,12 +1707,91 @@ async function interaction(i) {
             ...tiers.map((tier, index) =>
               input(
                 `t${index}`,
-                `${tier.name} : chance % ; récompense`,
+                `${tier.name.slice(0, 17)} : chance % ; récompense`,
                 TextInputStyle.Short,
                 20,
                 true,
                 `${tier.chance};${tier.amount}`
               )
+            )
+          )
+        );
+
+        return;
+      }
+
+      if (cmd === 'lootbox' && sub === 'personnaliser') {
+        const currency = i.options.getString('monnaie');
+        const style = boxStyle(currency);
+
+        await i.showModal(
+          modal(
+            `boxstyle:${currency}`,
+            'Personnaliser la lootbox',
+            input(
+              'titre', 'Titre de la lootbox',
+              TextInputStyle.Short, 100, true, style.title
+            ),
+            input(
+              'description',
+              'Description (Markdown et retours à la ligne)',
+              TextInputStyle.Paragraph, 2000, false,
+              style.description
+            ),
+            input(
+              'couleur', 'Couleur HEX, exemple #FFD700',
+              TextInputStyle.Short, 7, true, hex(style.color)
+            )
+          )
+        );
+
+        return;
+      }
+
+      if (cmd === 'lootbox' && sub === 'rarete') {
+        const currency = i.options.getString('monnaie');
+        const index = i.options.getInteger('rarete');
+        const tier = tiersFor(currency)[index];
+        const image = i.options.getAttachment('image');
+
+        if (image && image.size > 8 * 1024 * 1024) {
+          throw new UserError(
+            'Image trop volumineuse : maximum 8 Mo.'
+          );
+        }
+
+        const id = randomUUID();
+
+        run(
+          'INSERT INTO drafts VALUES (?,?,?,?)',
+          id, i.user.id,
+          Date.now() + 20 * 60000,
+          JSON.stringify({
+            currency,
+            index,
+            image: image
+              ? { url: image.url, size: image.size }
+              : null,
+          })
+        );
+
+        await i.showModal(
+          modal(
+            `rarity:${id}`,
+            'Personnaliser la récompense',
+            input(
+              'nom', 'Nom de cette récompense',
+              TextInputStyle.Short, 80, true, tier.name
+            ),
+            input(
+              'description',
+              'Description (Markdown et retours à la ligne)',
+              TextInputStyle.Paragraph, 2000, false,
+              tier.description
+            ),
+            input(
+              'couleur', 'Couleur HEX, exemple #FFD700',
+              TextInputStyle.Short, 7, true, hex(tier.color)
             )
           )
         );
@@ -1611,15 +1825,111 @@ async function interaction(i) {
         return;
       }
 
+      if (i.customId.startsWith('boxstyle:')) {
+        const currency = i.customId.split(':')[1];
+
+        if (!['xp', 'coins'].includes(currency)) {
+          throw new UserError('Monnaie invalide.');
+        }
+
+        const style = boxStyle(currency);
+        const title = i.fields.getTextInputValue('titre').trim();
+
+        if (!title) {
+          throw new UserError('Le titre ne peut pas être vide.');
+        }
+
+        style.title = title;
+        style.description = i.fields.getTextInputValue('description').trim();
+        style.color = color(i.fields.getTextInputValue('couleur'));
+
+        set(`boxstyle:${currency}`, style);
+        await updateBoxes(currency);
+
+        await i.editReply(
+          'Titre, description et couleur enregistrés. ' +
+          'Les messages de lootbox accessibles ont été actualisés.'
+        );
+
+        return;
+      }
+
+      if (i.customId.startsWith('rarity:')) {
+        const id = i.customId.slice(7);
+
+        const record = get(
+          'SELECT * FROM drafts WHERE id=?',
+          id
+        );
+
+        if (
+          !record ||
+          record.user !== i.user.id ||
+          record.expires < Date.now()
+        ) {
+          throw new UserError(
+            'Formulaire expiré. Relance /lootbox rarete.'
+          );
+        }
+
+        const draft = JSON.parse(record.data);
+        const name = i.fields.getTextInputValue('nom').trim();
+
+        if (!name) {
+          throw new UserError(
+            'Le nom de la récompense ne peut pas être vide.'
+          );
+        }
+
+        const tierColor = color(
+          i.fields.getTextInputValue('couleur')
+        );
+
+        if (!run(
+          'DELETE FROM drafts WHERE id=?',
+          id
+        ).changes) {
+          throw new UserError('Formulaire déjà envoyé.');
+        }
+
+        const imageId = draft.image
+          ? await importAsset(draft.image)
+          : null;
+
+        const tiers = tiersFor(draft.currency);
+        const tier = tiers[draft.index];
+
+        tier.name = name;
+        tier.description = i.fields.getTextInputValue('description').trim();
+        tier.color = tierColor;
+
+        if (imageId) tier.image = imageId;
+
+        set(`tiers:${draft.currency}`, tiers);
+        await updateBoxes(draft.currency);
+
+        await i.editReply({
+          content: 'Récompense personnalisée. Aperçu ci-dessous :',
+          ...resultMessage(
+            i.user.id,
+            draft.currency,
+            tier,
+            boxStyle(draft.currency),
+            true
+          ),
+        });
+
+        return;
+      }
+
       const currency = i.customId.slice(6);
 
       if (!['xp', 'coins'].includes(currency)) {
         throw new UserError('Monnaie invalide.');
       }
 
-      const tiers = tiersDefault.map((tier, index) => {
-        const match = i.fields
-          .getTextInputValue(`t${index}`)
+      const tiers = tiersFor(currency).map((tier, index) => {
+        const match = i.fields.getTextInputValue(`t${index}`)
           .trim()
           .match(/^(\d{1,3})\s*;\s*(\d{1,7})$/);
 
@@ -1643,10 +1953,7 @@ async function interaction(i) {
       });
 
       if (
-        tiers.reduce(
-          (sum, tier) => sum + tier.chance,
-          0
-        ) !== 100
+        tiers.reduce((sum, tier) => sum + tier.chance, 0) !== 100
       ) {
         throw new UserError(
           'La somme des cinq probabilités doit être exactement 100 %.'
@@ -1656,8 +1963,7 @@ async function interaction(i) {
       if (
         tiers.some(
           (tier, index) =>
-            index &&
-            tier.amount <= tiers[index - 1].amount
+            index && tier.amount <= tiers[index - 1].amount
         )
       ) {
         throw new UserError(
@@ -1672,10 +1978,11 @@ async function interaction(i) {
         tiers,
       });
 
+      await updateBoxes(currency);
+
       await i.editReply(
-        'Raretés enregistrées. Republie la lootbox pour afficher ' +
-        'ces nouvelles valeurs ; les anciens boutons utilisent ' +
-        'déjà ces récompenses.'
+        'Chances et gains enregistrés. ' +
+        'Les noms, images et descriptions sont conservés.'
       );
 
       return;
@@ -1705,21 +2012,16 @@ async function interaction(i) {
           );
         }
 
+        if (!box.channel && i.channelId) {
+          run(
+            'UPDATE boxes SET channel=? WHERE message=?',
+            i.channelId,
+            i.message.id
+          );
+        }
+
         const tier = openBox(i.user.id, box.currency);
-
-        await i.editReply({
-          embeds: [
-            new EmbedBuilder()
-              .setColor(tier.color)
-              .setTitle(`🎁 ${tier.name}`)
-              .setDescription(
-                `Tu gagnes **${tier.amount} ` +
-                `${arg === 'xp' ? 'XP' : 'coins'}** !\n\n` +
-                position(i.user.id, arg)
-              ),
-          ],
-        });
-
+        await animateBox(i, box.currency, tier);
         return;
       }
 
@@ -1732,13 +2034,11 @@ async function interaction(i) {
         );
       }
 
-      const confirmed = run(
+      if (!run(
         'INSERT OR IGNORE INTO events VALUES (?,?)',
         `confirm:${i.message.id}`,
         Date.now()
-      );
-
-      if (!confirmed.changes) {
+      ).changes) {
         throw new UserError('Confirmation déjà utilisée.');
       }
 
@@ -1775,26 +2075,20 @@ async function interaction(i) {
           arg
         );
 
-        if (!quest) {
-          throw new UserError('Quête introuvable.');
-        }
+        if (!quest) throw new UserError('Quête introuvable.');
 
         run(
           'UPDATE quests SET active=0 WHERE id=?',
           arg
         );
 
-        const thread = await i.guild.channels
-          .fetch(arg)
-          .catch(e => {
-            if (Number(e.code) === 10003) return null;
-            throw e;
-          });
+        const thread = await i.guild.channels.fetch(arg).catch(e => {
+          if (Number(e.code) === 10003) return null;
+          throw e;
+        });
 
         if (thread) {
-          await thread.delete(
-            'Suppression de quête confirmée'
-          );
+          await thread.delete('Suppression de quête confirmée');
         }
 
         audit(i.user.id, 'suppression_quete', {
@@ -1810,11 +2104,7 @@ async function interaction(i) {
     }
 
     const cmd = i.commandName;
-
-    const sub = cmd === 'profil'
-      ? ''
-      : i.options.getSubcommand();
-
+    const sub = cmd === 'profil' ? '' : i.options.getSubcommand();
     const currency = i.options.getString('monnaie');
 
     if (cmd === 'profil') {
@@ -1839,23 +2129,19 @@ async function interaction(i) {
            LIMIT 40`
         );
 
-        const text = quests
-          .map(
-            quest =>
-              `<#${quest.id}> · ` +
-              `${rewardLabel(quest.xp, quest.coins)} · ` +
-              `${quest.active ? 'ouverte' : 'fermée'}`
-          )
-          .join('\n');
+        const text = quests.map(
+          quest =>
+            `<#${quest.id}> · ` +
+            `${rewardLabel(quest.xp, quest.coins)} · ` +
+            `${quest.active ? 'ouverte' : 'fermée'}`
+        ).join('\n');
 
         await i.editReply({
           embeds: [
             new EmbedBuilder()
               .setColor(0x5865f2)
               .setTitle('Quêtes (40 dernières maximum)')
-              .setDescription(
-                text || 'Aucune quête créée.'
-              ),
+              .setDescription(text || 'Aucune quête créée.'),
           ],
         });
 
@@ -1863,11 +2149,7 @@ async function interaction(i) {
       }
 
       const id = questId(i.options.getString('fil'));
-
-      const quest = get(
-        'SELECT * FROM quests WHERE id=?',
-        id
-      );
+      const quest = get('SELECT * FROM quests WHERE id=?', id);
 
       if (!quest) {
         throw new UserError(
@@ -1881,23 +2163,18 @@ async function interaction(i) {
             'Supprimer définitivement ce post ? ' +
             'Les points gagnés seront conservés.',
           components: [
-            row(
-              button(
-                `delete:${id}:${i.user.id}`,
-                'Confirmer la suppression',
-                ButtonStyle.Danger
-              )
-            ),
+            row(button(
+              `delete:${id}:${i.user.id}`,
+              'Confirmer la suppression',
+              ButtonStyle.Danger
+            )),
           ],
         });
 
         return;
       }
 
-      run(
-        'UPDATE quests SET active=0 WHERE id=?',
-        id
-      );
+      run('UPDATE quests SET active=0 WHERE id=?', id);
 
       const thread = await i.guild.channels.fetch(id);
 
@@ -1922,8 +2199,36 @@ async function interaction(i) {
         await refreshBoards(true);
 
         await i.editReply(
-          'Actualisation demandée. Les erreurs éventuelles ' +
-          'sont signalées dans les logs.'
+          'Actualisation demandée. ' +
+          'Les erreurs éventuelles sont signalées dans les logs.'
+        );
+
+        return;
+      }
+
+      const selectedColor = i.options.getString('couleur');
+      const image = i.options.getAttachment('image');
+
+      const parsedColor = selectedColor
+        ? color(selectedColor)
+        : null;
+
+      const imageId = image ? await importAsset(image) : null;
+
+      if (parsedColor !== null) {
+        set(`boardcolor:${currency}`, parsedColor);
+      }
+
+      if (imageId) {
+        set(`boardimage:${currency}`, imageId);
+      }
+
+      if (sub === 'apparence') {
+        await refreshBoards(true);
+
+        await i.editReply(
+          'Apparence du classement enregistrée. ' +
+          'Les classements accessibles ont été actualisés.'
         );
 
         return;
@@ -1938,18 +2243,22 @@ async function interaction(i) {
         P.ReadMessageHistory,
       ]);
 
+      if (setting(`boardimage:${currency}`, null)) {
+        permission(channel, [P.AttachFiles]);
+      }
+
       const existing = get(
         'SELECT * FROM boards WHERE currency=?',
         currency
       );
 
       if (existing && existing.channel === channel.id) {
-        const message = await channel.messages
-          .fetch(existing.message)
-          .catch(e => {
-            if (Number(e.code) === 10008) return null;
-            throw e;
-          });
+        const message = await channel.messages.fetch(
+          existing.message
+        ).catch(e => {
+          if (Number(e.code) === 10008) return null;
+          throw e;
+        });
 
         if (message) {
           await message.edit(leaderboard(currency));
@@ -1960,17 +2269,12 @@ async function interaction(i) {
             currency
           );
 
-          await i.editReply(
-            'Classement existant actualisé.'
-          );
-
+          await i.editReply('Classement existant actualisé.');
           return;
         }
       }
 
-      const message = await channel.send(
-        leaderboard(currency)
-      );
+      const message = await channel.send(leaderboard(currency));
 
       run(
         `INSERT INTO boards VALUES (?,?,?,?)
@@ -1978,21 +2282,13 @@ async function interaction(i) {
            channel=excluded.channel,
            message=excluded.message,
            day=excluded.day`,
-        currency,
-        channel.id,
-        message.id,
-        paris().day
+        currency, channel.id, message.id, paris().day
       );
 
       if (existing) {
         try {
-          const old = await client.channels.fetch(
-            existing.channel
-          );
-
-          const oldMessage = await old.messages.fetch(
-            existing.message
-          );
+          const old = await client.channels.fetch(existing.channel);
+          const oldMessage = await old.messages.fetch(existing.message);
 
           await oldMessage.edit({
             content: 'Ce classement a été déplacé.',
@@ -2004,10 +2300,7 @@ async function interaction(i) {
         }
       }
 
-      await i.editReply(
-        `Classement publié : ${message.url}`
-      );
-
+      await i.editReply(`Classement publié : ${message.url}`);
       return;
     }
 
@@ -2016,18 +2309,14 @@ async function interaction(i) {
         await i.editReply({
           content:
             `Remettre ${
-              currency === 'tout'
-                ? 'les XP et les coins'
-                : currency
+              currency === 'tout' ? 'les XP et les coins' : currency
             } de tous les membres à zéro ?`,
           components: [
-            row(
-              button(
-                `reset:${currency}:${i.user.id}`,
-                'Confirmer la remise à zéro',
-                ButtonStyle.Danger
-              )
-            ),
+            row(button(
+              `reset:${currency}:${i.user.id}`,
+              'Confirmer la remise à zéro',
+              ButtonStyle.Danger
+            )),
           ],
         });
 
@@ -2053,9 +2342,7 @@ async function interaction(i) {
           );
         }
 
-        const delta = sub === 'ajouter'
-          ? amount
-          : -amount;
+        const delta = sub === 'ajouter' ? amount : -amount;
 
         add(
           member.id,
@@ -2081,6 +2368,46 @@ async function interaction(i) {
     }
 
     if (cmd === 'lootbox') {
+      if (sub === 'apercu') {
+        const tier = tiersFor(currency)[
+          i.options.getInteger('rarete')
+        ];
+
+        await i.editReply(
+          resultMessage(
+            i.user.id, currency, tier,
+            boxStyle(currency), true
+          )
+        );
+
+        return;
+      }
+
+      const style = await styleFromOptions(i, currency);
+
+      if (sub === 'visuels') {
+        const seconds = i.options.getInteger('secondes');
+
+        if (seconds !== null) {
+          style.seconds = seconds;
+          set(`boxstyle:${currency}`, style);
+        }
+
+        await updateBoxes(currency);
+
+        const preview = boxMessage(currency);
+        preview.components = [];
+
+        await i.editReply({
+          content:
+            `Visuels enregistrés. Le GIF s’affichera pendant ` +
+            `${style.seconds} secondes avant la récompense.`,
+          ...preview,
+        });
+
+        return;
+      }
+
       const channel = i.options.getChannel('salon');
 
       permission(channel, [
@@ -2089,24 +2416,21 @@ async function interaction(i) {
         P.EmbedLinks,
       ]);
 
+      if (style.image) permission(channel, [P.AttachFiles]);
+
+      const title = i.options.getString('titre');
+
       const message = await channel.send(
-        boxMessage(
-          currency,
-          i.options.getString('titre') ||
-            '🎁 Ta lootbox du jour'
-        )
+        boxMessage(currency, title || undefined)
       );
 
       run(
-        'INSERT INTO boxes VALUES (?,?)',
-        message.id,
-        currency
+        `INSERT INTO boxes(message,currency,channel,title)
+         VALUES (?,?,?,?)`,
+        message.id, currency, channel.id, title
       );
 
-      await i.editReply(
-        `Lootbox publiée : ${message.url}`
-      );
-
+      await i.editReply(`Lootbox publiée : ${message.url}`);
       return;
     }
 
@@ -2117,84 +2441,28 @@ async function interaction(i) {
 
       if (sub === 'configurer') {
         for (const key of [
-          'message',
-          'media',
-          'reaction',
-          'invitation',
-          'delai',
+          'message', 'media', 'reaction', 'invitation', 'delai',
         ]) {
           const value = i.options.getInteger(key);
-
-          if (value !== null) {
-            config[key] = value;
-          }
+          if (value !== null) config[key] = value;
         }
 
         const active = i.options.getBoolean('active');
-
-        if (active !== null) {
-          config.active = active;
-        }
-      } else if (sub === 'salon') {
-        const action = i.options.getString('action');
-        const channel = i.options.getChannel('salon');
-
-        if (action === 'tous') {
-          config.channels = [];
-        } else {
-          if (!channel) {
-            throw new UserError('Choisis un salon.');
-          }
-
-          if (
-            action === 'retirer' &&
-            config.channels.length === 1 &&
-            config.channels.includes(channel.id)
-          ) {
-            throw new UserError(
-              'Retirer le dernier salon réactiverait tous les salons. ' +
-              'Désactive l’activité avec /activite configurer ' +
-              'active:false, ou utilise l’action tous.'
-            );
-          }
-
-          config.channels = action === 'ajouter'
-            ? [
-                ...new Set([
-                  ...config.channels,
-                  channel.id,
-                ]),
-              ]
-            : config.channels.filter(
-                id => id !== channel.id
-              );
-
-          if (config.channels.length > 25) {
-            throw new UserError(
-              'Maximum 25 salons d’activité.'
-            );
-          }
-        }
+        if (active !== null) config.active = active;
       }
 
+      delete config.channels;
       set('activity', config);
 
       await i.editReply({
         content:
-          `Activité : **${
-            config.active ? 'active' : 'désactivée'
-          }**\n` +
+          `Activité : **${config.active ? 'active' : 'désactivée'}**\n` +
           `Message : ${config.message} XP\n` +
           `Bonus image/vidéo : ${config.media} XP\n` +
           `Réaction : ${config.reaction} XP\n` +
           `Invitation : ${config.invitation} XP\n` +
           `Délai : ${config.delai} s\n` +
-          `Salons : ${
-            config.channels
-              .map(id => `<#${id}>`)
-              .join(', ') ||
-            'tous les salons accessibles'
-          }`,
+          'Les gains s’appliquent à tous les salons accessibles du serveur.',
         allowedMentions: noPing,
       });
     }
@@ -2213,6 +2481,7 @@ async function interaction(i) {
           content,
           embeds: [],
           components: [],
+          attachments: [],
         });
       } else {
         await i.reply({
@@ -2230,21 +2499,16 @@ let catchingUp = false;
 
 async function catchUpQuests() {
   if (catchingUp) return;
-
   catchingUp = true;
 
   try {
-    const quests = all(
+    for (const quest of all(
       'SELECT * FROM quests WHERE active=1'
-    );
-
-    for (const quest of quests) {
+    )) {
       if (stopping) break;
 
       try {
-        const thread = await client.channels.fetch(
-          quest.id
-        );
+        const thread = await client.channels.fetch(quest.id);
 
         permission(thread, [
           P.ViewChannel,
@@ -2283,8 +2547,7 @@ async function catchUpQuests() {
           }
 
           before = rows.reduce(
-            (a, b) =>
-              BigInt(a.id) < BigInt(b.id) ? a : b
+            (a, b) => BigInt(a.id) < BigInt(b.id) ? a : b
           ).id;
         }
 
@@ -2298,8 +2561,7 @@ async function catchUpQuests() {
         }
 
         pending.sort(
-          (a, b) =>
-            BigInt(a.id) < BigInt(b.id) ? -1 : 1
+          (a, b) => BigInt(a.id) < BigInt(b.id) ? -1 : 1
         );
 
         for (const message of pending) {
@@ -2327,39 +2589,31 @@ client.on(
 
 client.on(
   Events.MessageCreate,
-  message =>
-    task('Message', () => processMessage(message))
+  message => task('Message', () => processMessage(message))
 );
 
 client.on(
   Events.MessageUpdate,
-  (_old, message) =>
-    task('Modification', async () => {
-      if (message.partial) {
-        message = await message.fetch();
-      }
-
-      // Ajouter une preuve après coup peut valider la quête.
-      await processMessage(message, true);
-    })
+  (_old, message) => task('Modification', async () => {
+    if (message.partial) message = await message.fetch();
+    await processMessage(message, true);
+  })
 );
 
 client.on(
   Events.MessageReactionAdd,
-  (reaction, author) =>
-    task(
-      'Réaction',
-      () => processReaction(reaction, author)
-    )
+  (reaction, author) => task(
+    'Réaction',
+    () => processReaction(reaction, author)
+  )
 );
 
 client.on(
   Events.GuildMemberAdd,
-  member =>
-    task(
-      'Arrivée',
-      () => queueInvite(() => join(member))
-    )
+  member => task(
+    'Arrivée',
+    () => queueInvite(() => join(member))
+  )
 );
 
 client.on(Events.InviteCreate, invite => {
@@ -2373,7 +2627,7 @@ client.on(Events.InviteCreate, invite => {
 });
 
 client.on(Events.InviteDelete, () => {
-  // Garder la référence précédente pour détecter l'ambiguïté.
+  // Une invitation disparue rend l'attribution incertaine.
 });
 
 client.on(Events.ShardResume, () => {
@@ -2388,9 +2642,7 @@ client.on(
 async function main() {
   await new Promise((resolve, reject) => {
     const timeout = setTimeout(
-      () => reject(
-        new Error('Connexion Discord trop longue')
-      ),
+      () => reject(new Error('Connexion Discord trop longue')),
       60000
     );
 
